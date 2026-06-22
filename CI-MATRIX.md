@@ -92,9 +92,12 @@ To flip to signed builds, add the two secrets and remove the
 ## Verified working
 
 The matrix was triggered via `workflow_dispatch` on branch
-`ci/matrix-expansion` (commit `96ff4f0`); all 8 shards dispatched,
-ran in parallel, and produced a defined result. Run URL:
-`https://github.com/griptoad26/xkg-releases/actions/runs/<id>`.
+`ci/matrix-expansion` (commits `cbc320b` head, matrix-expand at
+`33dad09`); all 8 shards dispatched, ran in parallel, and produced
+a defined result. Run URLs:
+
+- Run #1 (initial): `https://github.com/griptoad26/xkg-releases/actions/runs/27926781264`
+- Run #2 (continue-on-error on checkouts): `https://github.com/griptoad26/xkg-releases/actions/runs/27926901774`
 
 The actual installers don't yet ship because the build steps need
 the source checkouts to succeed (PAT for the private repo) and a
