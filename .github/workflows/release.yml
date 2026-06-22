@@ -198,32 +198,47 @@ jobs:
         with:
           path: releases
 
+      # Source repos are external to xkg-releases. Some are private
+      # (e.g. x-knowledge-graph) and the default GITHUB_TOKEN has
+      # read-only access to public repos in the same org but not
+      # to private ones in other orgs. Mark the checkouts as
+      # continue-on-error so a private-repo permission gap doesn't
+      # fail the whole matrix; the build step will then surface a
+      # clear "src-tauri not found" error pointing at the missing
+      # PAT / fine-grained token that needs to be added.
       - name: Checkout xkg-desktop
         uses: actions/checkout@v4
+        continue-on-error: true
         with:
           repository: griptoad26/xkg-desktop
           path: sources/xkg-desktop
 
       - name: Checkout xkg-mobile
         uses: actions/checkout@v4
+        continue-on-error: true
         with:
           repository: griptoad26/xkg-mobile
           path: sources/xkg-mobile
 
       - name: Checkout x-knowledge-graph
         uses: actions/checkout@v4
+        continue-on-error: true
         with:
           repository: griptoad26/x-knowledge-graph
           path: sources/x-knowledge-graph
 
       - name: Symlink sources into expected paths
+        continue-on-error: true
         run: |
-          set -e
-          ln -sfn sources/xkg-desktop/src-tauri src-tauri
-          ln -sfn sources/xkg-mobile/mobile mobile
-          ln -sfn sources/x-knowledge-graph/server server
+          set +e
+          [ -d sources/xkg-desktop ] && ln -sfn sources/xkg-desktop/src-tauri src-tauri
+          [ -d sources/xkg-mobile ]   && ln -sfn sources/xkg-mobile/mobile mobile
+          [ -d sources/x-knowledge-graph ] && ln -sfn sources/x-knowledge-graph/server server
           echo "=== workspace layout ==="
           ls -la src-tauri mobile server 2>&1 | head -10
+          if [ ! -e src-tauri ] || [ ! -e mobile ] || [ ! -e server ]; then
+            echo "::warning::One or more source checkouts were missing — the build will likely fail. Add a PAT as ACTIONS_CHECKOUT_TOKEN secret for private repos."
+          fi
 
       - name: Setup Node (desktop only)
         if: matrix.app == 'desktop'
