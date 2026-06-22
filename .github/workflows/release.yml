@@ -231,9 +231,12 @@ jobs:
         continue-on-error: true
         run: |
           set +e
+          # xkg-desktop: Tauri project lives at src-tauri/ inside the repo
           [ -d sources/xkg-desktop ] && ln -sfn sources/xkg-desktop/src-tauri src-tauri
-          [ -d sources/xkg-mobile ]   && ln -sfn sources/xkg-mobile/mobile mobile
-          [ -d sources/x-knowledge-graph ] && ln -sfn sources/x-knowledge-graph/server server
+          # xkg-mobile: Flutter project IS the repo root (lib/, pubspec.yaml at top)
+          [ -d sources/xkg-mobile ] && ln -sfn sources/xkg-mobile mobile
+          # x-knowledge-graph: Flask project IS the repo root (main.py, core/, etc.)
+          [ -d sources/x-knowledge-graph ] && ln -sfn sources/x-knowledge-graph server
           echo "=== workspace layout ==="
           ls -la src-tauri mobile server 2>&1 | head -10
           if [ ! -e src-tauri ] || [ ! -e mobile ] || [ ! -e server ]; then
@@ -251,6 +254,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.os == 'windows-2022' && 'x86_64-pc-windows-msvc' || (matrix.os == 'macos-14' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '') }}
+
+      - name: Install tauri-cli (desktop only)
+        if: matrix.app == 'desktop'
+        run: cargo install tauri-cli --version "^2" --locked
 
       - name: Setup Flutter (mobile only)
         if: matrix.app == 'mobile'
