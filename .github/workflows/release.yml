@@ -1,15 +1,29 @@
 name: xkg-release
 
 # Triggers:
-#   - Tag push matching v* (e.g. v0.1.0, v0.2.0-rc1)
-#   - Manual run via workflow_dispatch (choose version)
-#   - Nightly cron at 02:00 UTC (= 19:00 PDT) — defense-in-depth alongside
-#     the local cron on the build host at 03:00 UTC (= 20:00 PDT).
+#   - Tag push matching v* (e.g. v0.1.0, v0.2.0-rc1)         → real release
+#   - Manual run via workflow_dispatch (choose version)       → ad-hoc build
+#   - Nightly cron at 02:00 UTC (= 19:00 PDT)                 → smoke test
 #
 # Builds all 3 apps in parallel using a matrix strategy and uploads the
 # real installers as a GitHub release. The same matrix can also be run
 # locally to populate the /home/x2/xkg-releases/vX.Y.Z/ tree (see
 # scripts/build.sh).
+#
+# Matrix (8 shards):
+#   desktop  → ubuntu-22.04 (.deb/.AppImage/.rpm)
+#            → windows-2022 (.exe NSIS + .msi WiX, unsigned)
+#            → macos-14   (.dmg aarch64 + x86_64, unsigned)
+#   mobile   → ubuntu-22.04 (Android .apk per-ABI + .aab, debug-signed)
+#            → macos-14   (iOS .ipa, --no-codesign)
+#   web      → ubuntu-22.04 (PyInstaller ELF)
+#            → windows-2022 (PyInstaller PE)
+#            → ubuntu-22.04 (Docker image tar — separate shard)
+#
+# Signing: all builds are UNSIGNED by default (see docs/SIGNING.md).
+# The macos / ios / windows shards use --no-codesign / WiX-unsign so
+# the pipeline never blocks on missing certs. Add SIGNING_CERT_P12,
+# APPLE_TEAM_ID, KEYCHAIN_PWD secrets to flip to signed.
 
 on:
   push:
@@ -38,15 +52,21 @@ jobs:
   build:
     name: ${{ matrix.app }} / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # macos-14 shards can fail (e.g. Xcode license, code-signing, runner
+    # quota). Mark them continue-on-error so a single macOS failure
+    # doesn't block the rest of the matrix. The publish job still
+    # succeeds with whatever artifacts were produced.
+    continue-on-error: ${{ matrix.os == 'macos-14' }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # ── desktop (Tauri + React) ──
+          # ── desktop (Tauri 2.x, cross-platform) ──
           - app: desktop
             os: ubuntu-22.04
             build_cmd: |
               cd src-tauri
+              # unsigned: pass --no-bundle signing flags via env if/when set
               cargo tauri build --bundles deb,appimage,rpm
             artifact_glob: |
               src-tauri/target/release/bundle/deb/*.deb
@@ -56,16 +76,34 @@ jobs:
             os: windows-2022
             build_cmd: |
               cd src-tauri
+              # unsigned MSIs (WiX runs but no cert sign)
               cargo tauri build --target x86_64-pc-windows-msvc --bundles nsis,msi
             artifact_glob: |
               src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
               src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
           - app: desktop
             os: macos-14
+            # Real Mac runner required — Tauri's macOS bundler needs xcrun.
+            # Builds BOTH Apple Silicon and Intel DMGs in one job.
+            # UNSIGNED by default; see the Build step for the secret-driven
+            # signing toggle (you can't use ${{ secrets.* }} inside a
+            # matrix value — it has to be wired via env: at the step).
             build_cmd: |
               cd src-tauri
-              cargo tauri build --target aarch64-apple-darwin --bundles dmg
-              cargo tauri build --target x86_64-apple-darwin --bundles dmg
+              if [ -n "$APPLE_SIGNING_IDENTITY" ] && [ -n "$APPLE_TEAM_ID" ]; then
+                echo "::notice::Building SIGNED macOS DMGs"
+                CARGO_TAURI_SIGNING_IDENTITY="$APPLE_SIGNING_IDENTITY" \
+                  cargo tauri build --target aarch64-apple-darwin --bundles dmg
+                CARGO_TAURI_SIGNING_IDENTITY="$APPLE_SIGNING_IDENTITY" \
+                  cargo tauri build --target x86_64-apple-darwin --bundles dmg
+              else
+                echo "::notice::APPLE_SIGNING_IDENTITY/APPLE_TEAM_ID not set — building UNSIGNED DMGs"
+                # Tauri's macOS bundler produces a .dmg without signing.
+                # The resulting .dmg is installable after a one-time
+                # "Open with Finder → Open" override.
+                cargo tauri build --target aarch64-apple-darwin --bundles dmg
+                cargo tauri build --target x86_64-apple-darwin --bundles dmg
+              fi
             artifact_glob: |
               src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
               src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
@@ -79,17 +117,34 @@ jobs:
             build_cmd: |
               cd mobile
               flutter pub get
-              flutter build apk --release
+              # --split-per-abi produces a smaller APK per architecture
+              # (arm64-v8a, armeabi-v7a, x86_64) plus the universal "fat" APK
+              flutter build apk --release --split-per-abi
               flutter build appbundle --release
             artifact_glob: |
+              mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+              mobile/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+              mobile/build/app/outputs/flutter-apk/app-x86_64-release.apk
               mobile/build/app/outputs/flutter-apk/app-release.apk
               mobile/build/app/outputs/bundle/release/app-release.aab
           - app: mobile
             os: macos-14
+            # Real Mac runner required (Xcode).
+            # --no-codesign + ExportOptions.plist with signing disabled
+            # so we don't need a developer cert in CI. Signing is
+            # toggled by the step-level env (secrets aren't allowed in
+            # matrix values).
             build_cmd: |
               cd mobile
               flutter pub get
-              flutter build ios --release --no-codesign
+              if [ -f ios/ExportOptions.plist ] && [ -n "$APPLE_SIGNING_IDENTITY" ] && [ -n "$APPLE_TEAM_ID" ]; then
+                echo "::notice::Building SIGNED iOS IPA"
+                flutter build ipa --release \
+                  --export-options-plist=ios/ExportOptions.plist
+              else
+                echo "::notice::Building iOS IPA with --no-codesign (no signing identity in CI)"
+                flutter build ios --release --no-codesign
+              fi
             artifact_glob: |
               mobile/build/ios/ipa/*.ipa
           # ── web (x-knowledge-graph Flask server) ──
@@ -111,26 +166,94 @@ jobs:
               server/dist/xkg-server.exe
           - app: web
             os: ubuntu-22.04
+            # Docker image shard — uses the SAME ubuntu-22.04 runner as the
+            # PyInstaller linux shard, but is distinguished by `app=web`
+            # + the docker build_cmd. Both run in parallel.
+            # Note: docker buildx is preinstalled on ubuntu-22.04; we use
+            # the legacy daemon because we just need a tarball, not push.
             build_cmd: |
               cd server
-              docker build -t xkg-server:${{ github.ref_name }} .
+              docker build -f Dockerfile.v054 -t xkg-server:${{ github.ref_name }} .
               docker save -o xkg-server-${{ github.ref_name }}.tar xkg-server:${{ github.ref_name }}
             artifact_glob: |
               server/xkg-server-*.tar
+        # Filter the matrix to a single app when the user passes
+        # `inputs.app` on workflow_dispatch. The `exclude:` form with
+        # `${{ }}` is rejected by the schema validator, so the
+        # filtering is implemented as an `if:` guard on the Build +
+        # Collect steps (see below). When `inputs.app` is empty,
+        # every shard runs.
+        # (The simpler `exclude + ${{ }}` form is rejected by the
+        # schema validator, so we do it with a guard at step level.)
 
     steps:
-      - name: Checkout xkg-monorepo
+      # The xkg-releases repo only contains the pipeline + manifest.
+      # The actual source lives in three sibling repos that we check
+      # out into the workspace's `sources/` dir. The build commands
+      # below are still written assuming the legacy monorepo layout
+      # (cd src-tauri / cd mobile / cd server), so we symlink each
+      # source tree into the matching path after checkout.
+      - name: Checkout xkg-releases (this repo)
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          path: releases
+
+      # Source repos are external to xkg-releases. Some are private
+      # (e.g. x-knowledge-graph) and the default GITHUB_TOKEN has
+      # read-only access to public repos in the same org but not
+      # to private ones in other orgs. Mark the checkouts as
+      # continue-on-error so a private-repo permission gap doesn't
+      # fail the whole matrix; the build step will then surface a
+      # clear "src-tauri not found" error pointing at the missing
+      # PAT / fine-grained token that needs to be added.
+      - name: Checkout xkg-desktop
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: griptoad26/xkg-desktop
+          path: sources/xkg-desktop
+
+      - name: Checkout xkg-mobile
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: griptoad26/xkg-mobile
+          path: sources/xkg-mobile
+
+      - name: Checkout x-knowledge-graph
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: griptoad26/x-knowledge-graph
+          path: sources/x-knowledge-graph
+
+      - name: Symlink sources into expected paths
+        continue-on-error: true
+        run: |
+          set +e
+          [ -d sources/xkg-desktop ] && ln -sfn sources/xkg-desktop/src-tauri src-tauri
+          [ -d sources/xkg-mobile ]   && ln -sfn sources/xkg-mobile/mobile mobile
+          [ -d sources/x-knowledge-graph ] && ln -sfn sources/x-knowledge-graph/server server
+          echo "=== workspace layout ==="
+          ls -la src-tauri mobile server 2>&1 | head -10
+          if [ ! -e src-tauri ] || [ ! -e mobile ] || [ ! -e server ]; then
+            echo "::warning::One or more source checkouts were missing — the build will likely fail. Add a PAT as ACTIONS_CHECKOUT_TOKEN secret for private repos."
+          fi
 
       - name: Setup Node (desktop only)
         if: matrix.app == 'desktop'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
-          cache-dependency-path: desktop/src/package-lock.json
+          # Skip npm cache: the xkg-releases repo doesn't have a
+          # package.json (the actual Node build happens in the
+          # sources/xkg-desktop checkout). The cache step used to
+          # point at `package-lock.json` in the Svelte root, but
+          # that file isn't in this repo — the cache lookup
+          # would fail with "Some specified paths were not
+          # resolved". Set cache: false and let the in-source-repo
+          # yarn/npm step warm its own cache.
+          cache: false
 
       - name: Setup Rust (desktop only)
         if: matrix.app == 'desktop'
@@ -167,11 +290,24 @@ jobs:
         if: matrix.setup
         run: ${{ matrix.setup }}
 
+      # If the user passed `app=desktop|mobile|web` on workflow_dispatch,
+      # skip every shard whose matrix.app doesn't match. Implemented
+      # inline in the `if:` of the Build + Collect steps below — no
+      # separate env var is needed.
+
       - name: Build ${{ matrix.app }} on ${{ matrix.os }}
+        if: ${{ inputs.app == '' || inputs.app == matrix.app }}
+        # Secrets can't be referenced inside matrix values, so we
+        # forward the Apple signing identity at the step level for
+        # the macos-14 shards to consume.
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: ${{ matrix.build_cmd }}
         shell: bash
 
       - name: Collect artifacts
+        if: ${{ inputs.app == '' || inputs.app == matrix.app }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.app }}-${{ matrix.os }}
