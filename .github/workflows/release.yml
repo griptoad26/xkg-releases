@@ -65,33 +65,29 @@ jobs:
           - app: desktop
             os: ubuntu-22.04
             build_cmd: |
-              # Install npm deps first (vite + svelte) — Tauri's
-              # beforeBuildCommand runs 'npm run build' from the
-              # parent of src-tauri (where package.json lives).
-              if [ -f package.json ]; then
-                npm ci --no-audit --no-fund
-              fi
+              # Tauri's beforeBuildCommand runs 'npm run build' from the
+              # frontend root (where package.json lives). Run npm ci
+              # there first so vite is available.
+              cd sources/xkg-desktop
+              npm ci --no-audit --no-fund
               cd src-tauri
               # unsigned: pass --no-bundle signing flags via env if/when set
               cargo tauri build --bundles deb,appimage,rpm
             artifact_glob: |
-              src-tauri/target/release/bundle/deb/*.deb
-              src-tauri/target/release/bundle/appimage/*.AppImage
-              src-tauri/target/release/bundle/rpm/*.rpm
+              sources/xkg-desktop/src-tauri/target/release/bundle/deb/*.deb
+              sources/xkg-desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+              sources/xkg-desktop/src-tauri/target/release/bundle/rpm/*.rpm
           - app: desktop
             os: windows-2022
             build_cmd: |
-              # Install npm deps first (Tauri's beforeBuildCommand
-              # runs 'npm run build' from package.json's dir).
-              if [ -f package.json ]; then
-                npm ci --no-audit --no-fund
-              fi
+              cd sources/xkg-desktop
+              npm ci --no-audit --no-fund
               cd src-tauri
               # unsigned MSIs (WiX runs but no cert sign)
               cargo tauri build --target x86_64-pc-windows-msvc --bundles nsis,msi
             artifact_glob: |
-              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+              sources/xkg-desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+              sources/xkg-desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
           - app: desktop
             os: macos-14
             # Real Mac runner required — Tauri's macOS bundler needs xcrun.
@@ -101,11 +97,8 @@ jobs:
             # matrix value — it has to be wired via env: at the step).
             build_cmd: |
               cd src-tauri
-              # Install npm deps first (Tauri's beforeBuildCommand
-              # runs 'npm run build' from package.json's dir).
-              if [ -f package.json ]; then
-                npm ci --no-audit --no-fund
-              fi
+              cd sources/xkg-desktop
+              npm ci --no-audit --no-fund
               if [ -n "$APPLE_SIGNING_IDENTITY" ] && [ -n "$APPLE_TEAM_ID" ]; then
                 echo "::notice::Building SIGNED macOS DMGs"
                 CARGO_TAURI_SIGNING_IDENTITY="$APPLE_SIGNING_IDENTITY" \
@@ -121,8 +114,8 @@ jobs:
                 cargo tauri build --target x86_64-apple-darwin --bundles dmg
               fi
             artifact_glob: |
-              src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+              sources/xkg-desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+              sources/xkg-desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
           # ── mobile (Flutter) ──
           - app: mobile
             os: ubuntu-22.04
@@ -131,7 +124,7 @@ jobs:
               sudo apt-get install -y openjdk-17-jdk-headless unzip
               echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
             build_cmd: |
-              cd mobile
+              cd sources/xkg-mobile
               flutter pub get
               # --split-per-abi produces a smaller APK per architecture
               # (arm64-v8a, armeabi-v7a, x86_64) plus the universal "fat" APK
@@ -151,15 +144,23 @@ jobs:
             # toggled by the step-level env (secrets aren't allowed in
             # matrix values).
             build_cmd: |
-              cd mobile
+              cd sources/xkg-mobile
               flutter pub get
-              if [ -f ios/ExportOptions.plist ] && [ -n "$APPLE_SIGNING_IDENTITY" ] && [ -n "$APPLE_TEAM_ID" ]; then
-                echo "::notice::Building SIGNED iOS IPA"
-                flutter build ipa --release \
-                  --export-options-plist=ios/ExportOptions.plist
+              # iOS build: skip if ios/ platform hasn't been generated yet
+              # (the xkg-mobile repo only has android/; flutter create ios
+              # is a one-time setup step that's out of scope for this matrix).
+              if [ -d ios ] && [ -f ios/Podfile ]; then
+                if [ -f ios/ExportOptions.plist ] && [ -n "$APPLE_SIGNING_IDENTITY" ] && [ -n "$APPLE_TEAM_ID" ]; then
+                  echo "::notice::Building SIGNED iOS IPA"
+                  flutter build ipa --release \
+                    --export-options-plist=ios/ExportOptions.plist
+                else
+                  echo "::notice::Building iOS IPA with --no-codesign (no signing identity in CI)"
+                  flutter build ios --release --no-codesign
+                fi
               else
-                echo "::notice::Building iOS IPA with --no-codesign (no signing identity in CI)"
-                flutter build ios --release --no-codesign
+                echo "::notice::Skipping iOS build — ios/ platform not configured in this repo. Run 'flutter create --platforms=ios .' locally and commit ios/ to enable."
+                flutter build apk --release --split-per-abi || true
               fi
             artifact_glob: |
               mobile/build/ios/ipa/*.ipa
@@ -167,19 +168,19 @@ jobs:
           - app: web
             os: ubuntu-22.04
             build_cmd: |
-              cd server
+              cd sources/x-knowledge-graph
               pip install -r requirements.txt
               pyinstaller xkg-v054.spec --clean
             artifact_glob: |
-              server/dist/xkg
+              sources/x-knowledge-graph/dist/xkg
           - app: web
             os: windows-2022
             build_cmd: |
-              cd server
+              cd sources/x-knowledge-graph
               pip install -r requirements.txt
               pyinstaller xkg-v054.spec --clean
             artifact_glob: |
-              server/dist/xkg.exe
+              sources/x-knowledge-graph/dist/xkg.exe
           - app: web
             os: ubuntu-22.04
             # Docker image shard — uses the SAME ubuntu-22.04 runner as the
@@ -188,11 +189,11 @@ jobs:
             # Note: docker buildx is preinstalled on ubuntu-22.04; we use
             # the legacy daemon because we just need a tarball, not push.
             build_cmd: |
-              cd server
+              cd sources/x-knowledge-graph
               docker build -f Dockerfile.v054 -t xkg-server:${{ github.ref_name }} .
               docker save -o xkg-server-${{ github.ref_name }}.tar xkg-server:${{ github.ref_name }}
             artifact_glob: |
-              server/xkg-server-*.tar
+              sources/x-knowledge-graph/xkg-server-*.tar
         # Filter the matrix to a single app when the user passes
         # `inputs.app` on workflow_dispatch. The `exclude:` form with
         # `${{ }}` is rejected by the schema validator, so the
@@ -226,6 +227,8 @@ jobs:
         uses: actions/checkout@v4
         continue-on-error: true
         with:
+          # Use the user's PAT for private repo access
+          token: ${{ secrets.ACTIONS_CHECKOUT_TOKEN }}
           repository: griptoad26/xkg-desktop
           path: sources/xkg-desktop
 
@@ -233,6 +236,8 @@ jobs:
         uses: actions/checkout@v4
         continue-on-error: true
         with:
+          # Use the user's PAT for private repo access
+          token: ${{ secrets.ACTIONS_CHECKOUT_TOKEN }}
           repository: griptoad26/xkg-mobile
           path: sources/xkg-mobile
 
@@ -240,6 +245,8 @@ jobs:
         uses: actions/checkout@v4
         continue-on-error: true
         with:
+          # Use the user's PAT for private repo access
+          token: ${{ secrets.ACTIONS_CHECKOUT_TOKEN }}
           repository: griptoad26/x-knowledge-graph
           path: sources/x-knowledge-graph
 
@@ -278,6 +285,7 @@ jobs:
 
       - name: Install tauri-cli (desktop only)
         if: matrix.app == 'desktop'
+        shell: bash
         run: |
           # tauri-cli has hundreds of transitive deps; cold-cache install
           # can hit transient network errors. Retry up to 3 times.
