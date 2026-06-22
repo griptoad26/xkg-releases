@@ -278,7 +278,18 @@ jobs:
 
       - name: Install tauri-cli (desktop only)
         if: matrix.app == 'desktop'
-        run: cargo install tauri-cli --version "^2" --locked
+        run: |
+          # tauri-cli has hundreds of transitive deps; cold-cache install
+          # can hit transient network errors. Retry up to 3 times.
+          for i in 1 2 3; do
+            if cargo install tauri-cli --version "^2" --locked; then
+              exit 0
+            fi
+            echo "::warning::tauri-cli install attempt $i failed, retrying in 20s..."
+            sleep 20
+          done
+          echo "::error::tauri-cli install failed after 3 attempts"
+          exit 1
 
       - name: Setup Flutter (mobile only)
         if: matrix.app == 'mobile'
