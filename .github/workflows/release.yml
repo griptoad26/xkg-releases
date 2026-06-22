@@ -65,6 +65,12 @@ jobs:
           - app: desktop
             os: ubuntu-22.04
             build_cmd: |
+              # Install npm deps first (vite + svelte) — Tauri's
+              # beforeBuildCommand runs 'npm run build' from the
+              # parent of src-tauri (where package.json lives).
+              if [ -f package.json ]; then
+                npm ci --no-audit --no-fund
+              fi
               cd src-tauri
               # unsigned: pass --no-bundle signing flags via env if/when set
               cargo tauri build --bundles deb,appimage,rpm
@@ -75,6 +81,11 @@ jobs:
           - app: desktop
             os: windows-2022
             build_cmd: |
+              # Install npm deps first (Tauri's beforeBuildCommand
+              # runs 'npm run build' from package.json's dir).
+              if [ -f package.json ]; then
+                npm ci --no-audit --no-fund
+              fi
               cd src-tauri
               # unsigned MSIs (WiX runs but no cert sign)
               cargo tauri build --target x86_64-pc-windows-msvc --bundles nsis,msi
@@ -90,6 +101,11 @@ jobs:
             # matrix value — it has to be wired via env: at the step).
             build_cmd: |
               cd src-tauri
+              # Install npm deps first (Tauri's beforeBuildCommand
+              # runs 'npm run build' from package.json's dir).
+              if [ -f package.json ]; then
+                npm ci --no-audit --no-fund
+              fi
               if [ -n "$APPLE_SIGNING_IDENTITY" ] && [ -n "$APPLE_TEAM_ID" ]; then
                 echo "::notice::Building SIGNED macOS DMGs"
                 CARGO_TAURI_SIGNING_IDENTITY="$APPLE_SIGNING_IDENTITY" \
@@ -153,17 +169,17 @@ jobs:
             build_cmd: |
               cd server
               pip install -r requirements.txt
-              pyinstaller xkg-server.spec --clean
+              pyinstaller xkg-v054.spec --clean
             artifact_glob: |
-              server/dist/xkg-server
+              server/dist/xkg
           - app: web
             os: windows-2022
             build_cmd: |
               cd server
               pip install -r requirements.txt
-              pyinstaller xkg-server.spec --clean
+              pyinstaller xkg-v054.spec --clean
             artifact_glob: |
-              server/dist/xkg-server.exe
+              server/dist/xkg.exe
           - app: web
             os: ubuntu-22.04
             # Docker image shard — uses the SAME ubuntu-22.04 runner as the
@@ -228,6 +244,7 @@ jobs:
           path: sources/x-knowledge-graph
 
       - name: Symlink sources into expected paths
+        shell: bash
         continue-on-error: true
         run: |
           set +e
@@ -239,6 +256,10 @@ jobs:
           [ -d sources/x-knowledge-graph ] && ln -sfn sources/x-knowledge-graph server
           echo "=== workspace layout ==="
           ls -la src-tauri mobile server 2>&1 | head -10
+          # On Windows, `ln -sfn` may not work; fall back to cmd mklink /D
+          if [ ! -e server ] && [ -d sources/x-knowledge-graph ] && command -v cmd.exe >/dev/null 2>&1; then
+            cmd //c "mklink /D server sources\\x-knowledge-graph" || true
+          fi
           if [ ! -e src-tauri ] || [ ! -e mobile ] || [ ! -e server ]; then
             echo "::warning::One or more source checkouts were missing — the build will likely fail. Add a PAT as ACTIONS_CHECKOUT_TOKEN secret for private repos."
           fi
