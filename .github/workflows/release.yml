@@ -245,13 +245,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
-          # The xkg-desktop Svelte layout has package-lock.json at the
-          # repo root (not under desktop/src/). Older copies of this
-          # workflow pointed at the wrong path; the cache simply
-          # missed but didn't fail. Keep the path explicit so a
-          # future move is caught.
-          cache-dependency-path: package-lock.json
+          # Skip npm cache: the xkg-releases repo doesn't have a
+          # package.json (the actual Node build happens in the
+          # sources/xkg-desktop checkout). The cache step used to
+          # point at `package-lock.json` in the Svelte root, but
+          # that file isn't in this repo — the cache lookup
+          # would fail with "Some specified paths were not
+          # resolved". Set cache: false and let the in-source-repo
+          # yarn/npm step warm its own cache.
+          cache: false
 
       - name: Setup Rust (desktop only)
         if: matrix.app == 'desktop'
