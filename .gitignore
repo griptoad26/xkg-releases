@@ -1,0 +1,65 @@
+# ─── Python / Node / Rust / Flutter build outputs ───
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+node_modules/
+src-tauri/target/
+src-tauri/gen/schemas/
+mobile/build/
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/.packages
+mobile/pubspec.lock
+server/build/
+server/dist/
+*.spec.bak
+
+# ─── Heavy binary artifacts in the v0.1.0/ tree ───
+# Only checksums and small metadata are tracked; the actual installers
+# come from the workflow's release job (upload-artifact + gh-release).
+*.deb
+*.rpm
+*.AppImage
+*.exe
+*.msi
+*.dmg
+*.apk
+*.aab
+*.ipa
+*.tar
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.zip
+*.7z
+*.bin
+# But KEEP the *.sha256 / *CHECKSUM* / *SHA256* / *RELEASE_NOTES* / *.txt files
+!*.sha256
+!*.sha1
+!*CHECKSUM*
+!*SHA256*
+!*RELEASE_NOTES*
+!*.txt
+!*.md
+
+# ─── Editor / OS junk ───
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db
+
+# ─── Local env / logs ───
+.env
+.env.local
+*.local
+*.log
+
+# Specific heavy installer files
+v0.1.0/web/linux/xkg-server_*
+v0.1.0/web/linux/XKG-v*
+v0.1.0/web/linux/xkg_*

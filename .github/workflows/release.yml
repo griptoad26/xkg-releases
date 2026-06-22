@@ -1,0 +1,295 @@
+name: xkg-release
+
+# Triggers:
+#   - Tag push matching v* (e.g. v0.1.0, v0.2.0-rc1)
+#   - Manual run via workflow_dispatch (choose version)
+#   - Nightly cron at 02:00 UTC (= 19:00 PDT) — defense-in-depth alongside
+#     the local cron on the build host at 03:00 UTC (= 20:00 PDT).
+#
+# Builds all 3 apps in parallel using a matrix strategy and uploads the
+# real installers as a GitHub release. The same matrix can also be run
+# locally to populate the /home/x2/xkg-releases/vX.Y.Z/ tree (see
+# scripts/build.sh).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.1.0)"
+        required: true
+        default: "0.1.0"
+      app:
+        description: "Limit to a single app (blank = all)"
+        required: false
+        default: ""
+  schedule:
+    # Nightly at 02:00 UTC (= 19:00 PDT, runs while user is offline).
+    # Local cron on the build host runs 1 hour later as a fallback.
+    - cron: '0 2 * * *'
+
+permissions:
+  contents: write   # needed to create the release + upload assets
+  packages: write
+
+jobs:
+  build:
+    name: ${{ matrix.app }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── desktop (Tauri + React) ──
+          - app: desktop
+            os: ubuntu-22.04
+            build_cmd: |
+              cd src-tauri
+              cargo tauri build --bundles deb,appimage,rpm
+            artifact_glob: |
+              src-tauri/target/release/bundle/deb/*.deb
+              src-tauri/target/release/bundle/appimage/*.AppImage
+              src-tauri/target/release/bundle/rpm/*.rpm
+          - app: desktop
+            os: windows-2022
+            build_cmd: |
+              cd src-tauri
+              cargo tauri build --target x86_64-pc-windows-msvc --bundles nsis,msi
+            artifact_glob: |
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+          - app: desktop
+            os: macos-14
+            build_cmd: |
+              cd src-tauri
+              cargo tauri build --target aarch64-apple-darwin --bundles dmg
+              cargo tauri build --target x86_64-apple-darwin --bundles dmg
+            artifact_glob: |
+              src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+          # ── mobile (Flutter) ──
+          - app: mobile
+            os: ubuntu-22.04
+            setup: |
+              sudo apt-get update
+              sudo apt-get install -y openjdk-17-jdk-headless unzip
+              echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+            build_cmd: |
+              cd mobile
+              flutter pub get
+              flutter build apk --release
+              flutter build appbundle --release
+            artifact_glob: |
+              mobile/build/app/outputs/flutter-apk/app-release.apk
+              mobile/build/app/outputs/bundle/release/app-release.aab
+          - app: mobile
+            os: macos-14
+            build_cmd: |
+              cd mobile
+              flutter pub get
+              flutter build ios --release --no-codesign
+            artifact_glob: |
+              mobile/build/ios/ipa/*.ipa
+          # ── web (x-knowledge-graph Flask server) ──
+          - app: web
+            os: ubuntu-22.04
+            build_cmd: |
+              cd server
+              pip install -r requirements.txt
+              pyinstaller xkg-server.spec --clean
+            artifact_glob: |
+              server/dist/xkg-server
+          - app: web
+            os: windows-2022
+            build_cmd: |
+              cd server
+              pip install -r requirements.txt
+              pyinstaller xkg-server.spec --clean
+            artifact_glob: |
+              server/dist/xkg-server.exe
+          - app: web
+            os: ubuntu-22.04
+            build_cmd: |
+              cd server
+              docker build -t xkg-server:${{ github.ref_name }} .
+              docker save -o xkg-server-${{ github.ref_name }}.tar xkg-server:${{ github.ref_name }}
+            artifact_glob: |
+              server/xkg-server-*.tar
+
+    steps:
+      - name: Checkout xkg-monorepo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node (desktop only)
+        if: matrix.app == 'desktop'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: desktop/src/package-lock.json
+
+      - name: Setup Rust (desktop only)
+        if: matrix.app == 'desktop'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'windows-2022' && 'x86_64-pc-windows-msvc' || (matrix.os == 'macos-14' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '') }}
+
+      - name: Setup Flutter (mobile only)
+        if: matrix.app == 'mobile'
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.24.0"
+          channel: stable
+          cache: true
+
+      - name: Setup Python (web only)
+        if: matrix.app == 'web'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Java (mobile on linux)
+        if: matrix.app == 'mobile' && matrix.os == 'ubuntu-22.04'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK (mobile on linux)
+        if: matrix.app == 'mobile' && matrix.os == 'ubuntu-22.04'
+        uses: android-actions/setup-android@v3
+
+      - name: Run setup
+        if: matrix.setup
+        run: ${{ matrix.setup }}
+
+      - name: Build ${{ matrix.app }} on ${{ matrix.os }}
+        run: ${{ matrix.build_cmd }}
+        shell: bash
+
+      - name: Collect artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app }}-${{ matrix.os }}
+          path: ${{ matrix.artifact_glob }}
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Rename to canonical filenames
+        working-directory: dist
+        run: |
+          bash ../scripts/rename-artifacts.sh
+          echo "--- final tree ---"
+          find . -type f -not -name "*.sha256" | sort
+
+      - name: Generate SHA256 checksums per category
+        working-directory: dist
+        run: |
+          for cat in desktop/windows desktop/linux desktop/macos mobile/android mobile/ios web/linux web/windows web/docker; do
+            if compgen -G "$cat/*" > /dev/null; then
+              ( cd "$cat" && sha256sum * > checksums.sha256 )
+            fi
+          done
+          # master checksum list
+          sha256sum $(find . -type f -not -name "*.sha256") | sort > ALL_CHECKSUMS.sha256
+
+      - name: Create / update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "XKG ${{ github.ref_name }}"
+          generate_release_notes: true
+          files: |
+            dist/**/*.deb
+            dist/**/*.AppImage
+            dist/**/*.rpm
+            dist/**/*.exe
+            dist/**/*.msi
+            dist/**/*.dmg
+            dist/**/*.apk
+            dist/**/*.aab
+            dist/**/*.ipa
+            dist/**/*.tar
+            dist/**/checksums.sha256
+            dist/ALL_CHECKSUMS.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Nightly publish (additive) ──
+  # Runs only when this workflow was triggered by the schedule. Creates (or
+  # re-uploads to) a single rolling 'nightly' GitHub release tagged with the
+  # current UTC date, so the GitHub `releases/latest/download/...` fallback
+  # URL always points at a fresh nightly build. Marked prerelease so it
+  # doesn't show up in stable upgrade prompts.
+  publish-nightly:
+    name: Publish nightly GitHub release
+    needs: build
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'schedule'
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Rename to canonical filenames
+        working-directory: dist
+        run: |
+          bash ../scripts/rename-artifacts.sh
+          echo "--- final tree ---"
+          find . -type f -not -name "*.sha256" | sort
+
+      - name: Generate SHA256 checksums per category
+        working-directory: dist
+        run: |
+          for cat in desktop/windows desktop/linux desktop/macos mobile/android mobile/ios web/linux web/windows web/docker; do
+            if compgen -G "$cat/*" > /dev/null; then
+              ( cd "$cat" && sha256sum * > checksums.sha256 )
+            fi
+          done
+          # master checksum list
+          sha256sum $(find . -type f -not -name "*.sha256") | sort > ALL_CHECKSUMS.sha256
+
+      - name: Compute nightly tag (YYYYMMDD, UTC)
+        id: tag
+        run: echo "tag=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Create / update nightly release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly-${{ steps.tag.outputs.tag }}
+          name: "XKG nightly (${{ steps.tag.outputs.tag }} UTC)"
+          generate_release_notes: true
+          prerelease: true
+          # Overwrite assets on re-runs so the nightly release stays current
+          # and never grows unboundedly.
+          files: |
+            dist/**/*.deb
+            dist/**/*.AppImage
+            dist/**/*.rpm
+            dist/**/*.exe
+            dist/**/*.msi
+            dist/**/*.dmg
+            dist/**/*.apk
+            dist/**/*.aab
+            dist/**/*.ipa
+            dist/**/*.tar
+            dist/**/checksums.sha256
+            dist/ALL_CHECKSUMS.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

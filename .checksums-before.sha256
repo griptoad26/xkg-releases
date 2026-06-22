@@ -1,0 +1,21 @@
+1d4775fd398cc23b9d97f21a67848cb9e98687a4bc6bbc8661b3d873a6bf191d  ./desktop/linux/XKG-Desktop_0.1.0_amd64.AppImage
+1dad01ee5155230368162c1d5d1ec77e902c6b38de91ac7373bd58d224473505  ./web/linux/XKG-v0.5.4-installer.sh
+2b3cd8a20042eba277a9af2f711ff7ba207369ba334c6bdbe123b10b042093e7  ./web/docker/xkg-server-0.5.4.tar.gz
+324dcdc9fb2da8bdbe4e748910dd15e65a129fb510f2500f451720beda976b95  ./RELEASE_NOTES.md
+3e099f958bc894b32eb49a6012b91b0668689e9c5426b638870b4b3885d85a9d  ./mobile/android/app-release.apk
+3e099f958bc894b32eb49a6012b91b0668689e9c5426b638870b4b3885d85a9d  ./mobile/android/xkg-mobile-0.1.0-release.apk
+434c407da2fdf430f55da9158e0002870e8ddc72a41b4e52ae0a8bd16eeec382  ./desktop/linux/XKG Desktop_0.2.0_amd64.deb
+4648d84721ee7435e3fa7cf25a8e36721bc3242e748a258b5e21575074594658  ./web/SHA256SUMS-from-build.txt
+5b6eb6632f990c5191ff83e7d14ea6dd22e5f538f6f1f6a3b88c9231ad412168  ./web/linux/xkg_0.5.4_amd64.deb
+73eae910a1a42dae8da2b57f78cb6abc5557eaf78cd695608813249d825356b5  ./desktop/linux/XKG Desktop-0.2.0-1.x86_64.rpm
+85b57c91600bb47439640eebde6a1521658cdfb3918687f24cf437da31c088ca  ./desktop/linux/XKG Desktop_0.1.0_amd64.deb
+85b57c91600bb47439640eebde6a1521658cdfb3918687f24cf437da31c088ca  ./desktop/linux/XKG-Desktop_0.1.0_amd64.deb
+9900d4be582c9d3a9f9e13c149ef572317f767edd87a42cafd2dfb1fe4eb3f12  ./desktop/windows/XKG Desktop_0.2.0_x64-setup.exe
+a86107e82b5082e817c7a89ce71b760ce95ccdcfaadb339e0a64b40dd51c0f5d  ./desktop/linux/XKG Desktop_0.2.0_amd64.AppImage
+afef3fc025139230eb7d9ca0b88ed8d9a768cc68d26cc2a8938c4e48f798ca9b  ./desktop/linux/XKG Desktop-0.1.0-1.x86_64.rpm
+afef3fc025139230eb7d9ca0b88ed8d9a768cc68d26cc2a8938c4e48f798ca9b  ./desktop/linux/XKG-Desktop-0.1.0-1.x86_64.rpm
+d626b5768ff0fafdcd93cb7a11c8ae279a0b4df1d2b555302bd90390deea092b  ./desktop/windows/XKG Desktop_0.1.0_x64-setup.exe
+d626b5768ff0fafdcd93cb7a11c8ae279a0b4df1d2b555302bd90390deea092b  ./desktop/windows/XKG-Desktop_0.1.0_x64-setup.exe
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ./ALL_CHECKSUMS.sha256
+edebeef3907f184552590e9e9412aca56dc6ec763cd4d89b5445100786cdfc92  ./web/linux/xkg-server_0.5.4_amd64
+edebeef3907f184552590e9e9412aca56dc6ec763cd4d89b5445100786cdfc92  ./web/linux/xkg-server_0.5.4_amd64.bin
