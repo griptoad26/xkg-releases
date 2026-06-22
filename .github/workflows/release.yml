@@ -85,22 +85,22 @@ jobs:
             os: macos-14
             # Real Mac runner required — Tauri's macOS bundler needs xcrun.
             # Builds BOTH Apple Silicon and Intel DMGs in one job.
-            # UNSIGNED: APPLE_SIGNING_IDENTITY / APPLE_TEAM_ID secrets empty
-            # → skip codesign; add them to flip to signed.
+            # UNSIGNED by default; see the Build step for the secret-driven
+            # signing toggle (you can't use ${{ secrets.* }} inside a
+            # matrix value — it has to be wired via env: at the step).
             build_cmd: |
               cd src-tauri
-              if [ -n "${{ secrets.APPLE_SIGNING_IDENTITY }}" ] && [ -n "${{ secrets.APPLE_TEAM_ID }}" ]; then
+              if [ -n "$APPLE_SIGNING_IDENTITY" ] && [ -n "$APPLE_TEAM_ID" ]; then
                 echo "::notice::Building SIGNED macOS DMGs"
-                CARGO_TAURI_SIGNING_IDENTITY="${{ secrets.APPLE_SIGNING_IDENTITY }}" \
+                CARGO_TAURI_SIGNING_IDENTITY="$APPLE_SIGNING_IDENTITY" \
                   cargo tauri build --target aarch64-apple-darwin --bundles dmg
-                CARGO_TAURI_SIGNING_IDENTITY="${{ secrets.APPLE_SIGNING_IDENTITY }}" \
+                CARGO_TAURI_SIGNING_IDENTITY="$APPLE_SIGNING_IDENTITY" \
                   cargo tauri build --target x86_64-apple-darwin --bundles dmg
               else
                 echo "::notice::APPLE_SIGNING_IDENTITY/APPLE_TEAM_ID not set — building UNSIGNED DMGs"
-                # Tauri's macOS bundler can produce a .dmg without a
-                # code-signing identity (it just doesn't sign). The
-                # produced .dmg is installable on the user's Mac
-                # after a one-time "Open with Finder → Open" override.
+                # Tauri's macOS bundler produces a .dmg without signing.
+                # The resulting .dmg is installable after a one-time
+                # "Open with Finder → Open" override.
                 cargo tauri build --target aarch64-apple-darwin --bundles dmg
                 cargo tauri build --target x86_64-apple-darwin --bundles dmg
               fi
@@ -131,11 +131,14 @@ jobs:
             os: macos-14
             # Real Mac runner required (Xcode).
             # --no-codesign + ExportOptions.plist with signing disabled
-            # so we don't need a developer cert in CI.
+            # so we don't need a developer cert in CI. Signing is
+            # toggled by the step-level env (secrets aren't allowed in
+            # matrix values).
             build_cmd: |
               cd mobile
               flutter pub get
-              if [ -f ios/ExportOptions.plist ] && [ -n "${{ secrets.APPLE_SIGNING_IDENTITY }}" ]; then
+              if [ -f ios/ExportOptions.plist ] && [ -n "$APPLE_SIGNING_IDENTITY" ] && [ -n "$APPLE_TEAM_ID" ]; then
+                echo "::notice::Building SIGNED iOS IPA"
                 flutter build ipa --release \
                   --export-options-plist=ios/ExportOptions.plist
               else
@@ -175,20 +178,13 @@ jobs:
             artifact_glob: |
               server/xkg-server-*.tar
         # Filter the matrix to a single app when the user passes
-        # `inputs.app` on workflow_dispatch. GitHub Actions evaluates
-        # this expression at job-start time; when the input is empty
-        # the include list below runs in full.
-        #
-        # Implemented by adding a `target_app` include field and then
-        # excluding shards where target_app != the runtime filter.
+        # `inputs.app` on workflow_dispatch. The `exclude:` form with
+        # `${{ }}` is rejected by the schema validator, so the
+        # filtering is implemented as an `if:` guard on the Build +
+        # Collect steps (see below). When `inputs.app` is empty,
+        # every shard runs.
         # (The simpler `exclude + ${{ }}` form is rejected by the
-        # schema validator, so we do it with a guard at step level —
-        # see `if: matrix.app == env.FILTER_APP || env.FILTER_APP == ''`
-        # in the build step below.)
-        # Exclude shards that don't match the user's app filter.
-        # The `exclude` form requires static YAML, so we use a different
-        # strategy: a `target_app` field in each include + a runtime
-        # gate on the Build step.
+        # schema validator, so we do it with a guard at step level.)
 
     steps:
       # The xkg-releases repo only contains the pipeline + manifest.
@@ -278,16 +274,18 @@ jobs:
         run: ${{ matrix.setup }}
 
       # If the user passed `app=desktop|mobile|web` on workflow_dispatch,
-      # skip every shard whose matrix.app doesn't match. We can do this
-      # in a single env var + `if:` guard on the steps below.
-      - name: Compute app filter
-        id: filter
-        run: |
-          filter="${{ inputs.app }}"
-          echo "filter=$filter" >> "$GITHUB_OUTPUT"
+      # skip every shard whose matrix.app doesn't match. Implemented
+      # inline in the `if:` of the Build + Collect steps below — no
+      # separate env var is needed.
 
       - name: Build ${{ matrix.app }} on ${{ matrix.os }}
         if: ${{ inputs.app == '' || inputs.app == matrix.app }}
+        # Secrets can't be referenced inside matrix values, so we
+        # forward the Apple signing identity at the step level for
+        # the macos-14 shards to consume.
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: ${{ matrix.build_cmd }}
         shell: bash
 
